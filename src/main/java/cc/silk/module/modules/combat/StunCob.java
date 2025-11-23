@@ -128,8 +128,10 @@ public class StunCob extends Module {
         int originalSlot = mc.player.getInventory().selectedSlot;
         mc.player.getInventory().selectedSlot = cobwebSlot;
         
-        mc.interactionManager.interactBlock(mc.player, Hand.MAIN_HAND, 
-            new BlockHitResult(pos, Direction.UP, blockPos, false));
+        // 1.21 Interaction Update
+        BlockHitResult hitResult = new BlockHitResult(pos, Direction.UP, blockPos, false);
+        mc.interactionManager.interactBlock(mc.player, Hand.MAIN_HAND, hitResult);
+        mc.player.swingHand(Hand.MAIN_HAND);
         
         mc.player.getInventory().selectedSlot = originalSlot;
     }
