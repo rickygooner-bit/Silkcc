@@ -25,11 +25,10 @@ import net.minecraft.entity.player.PlayerEntity;
 import net.minecraft.entity.projectile.WindChargeEntity;
 import net.minecraft.item.AxeItem;
 import net.minecraft.item.Item;
+import net.minecraft.item.MaceItem; // 1.21 Support
 import net.minecraft.item.SwordItem;
 import net.minecraft.util.hit.EntityHitResult;
 import org.lwjgl.glfw.GLFW;
-
-// Koi touch this and im going to fucking rape you
 
 public final class TriggerBot extends Module {
     public static final RangeSetting swordThreshold = new RangeSetting("Sword Threshold", 0.1, 1, 0.90, 0.95, 0.01);
@@ -42,10 +41,11 @@ public final class TriggerBot extends Module {
     public static final BooleanSetting ignoreInvisible = new BooleanSetting("No Invisible", true);
     public static final BooleanSetting ignoreCrystals = new BooleanSetting("No Crystals", true);
     public static final BooleanSetting respectShields = new BooleanSetting("Ignore Shields", false);
-    public static final BooleanSetting useOnlySwordOrAxe = new BooleanSetting("Only Sword or Axe", true);
+    public static final BooleanSetting useOnlyWeapon = new BooleanSetting("Only Weapon", true);
     public static final BooleanSetting onlyWhenMouseDown = new BooleanSetting("Only Mouse Hold", false);
     public static final BooleanSetting disableOnWorldChange = new BooleanSetting("Disable on Load", false);
     public static final BooleanSetting samePlayer = new BooleanSetting("Same Player", false);
+    public static final BooleanSetting maceSmash = new BooleanSetting("Mace Smash", true); // 1.21 Feature
 
     private final TimerUtil timer = new TimerUtil();
     private final TimerUtil samePlayerTimer = new TimerUtil();
@@ -66,8 +66,8 @@ public final class TriggerBot extends Module {
                 swordThreshold, axeThreshold,
                 axePostDelay, reactionTime,
                 cooldownMode, critMode, ignorePassiveMobs, ignoreCrystals, respectShields,
-                ignoreInvisible, onlyWhenMouseDown, useOnlySwordOrAxe,
-                disableOnWorldChange, samePlayer);
+                ignoreInvisible, onlyWhenMouseDown, useOnlyWeapon,
+                disableOnWorldChange, samePlayer, maceSmash);
     }
 
     @EventHandler
@@ -79,33 +79,27 @@ public final class TriggerBot extends Module {
 
     @EventHandler
     private void tick(TickEvent event) {
-        if (isNull())
-            return;
+        if (isNull()) return;
         assert mc.player != null;
-        if (mc.player.isUsingItem())
-            return;
-        if (mc.currentScreen != null)
-            return;
+        if (mc.player.isUsingItem()) return;
+        if (mc.currentScreen != null) return;
 
         target = mc.targetedEntity;
-        if (target == null)
-            return;
-        if (!isHoldingSwordOrAxe())
-            return;
+        if (target == null) return;
+        if (!isHoldingWeapon()) return;
 
         if (onlyWhenMouseDown.getValue() &&
                 GLFW.glfwGetMouseButton(mc.getWindow().getHandle(), GLFW.GLFW_MOUSE_BUTTON_LEFT) != GLFW.GLFW_PRESS) {
             return;
         }
 
-        if (!hasTarget(target))
-            return;
+        if (!hasTarget(target)) return;
 
         if (respectShields.getValue()) {
             Item item = mc.player.getMainHandStack().getItem();
             if (target instanceof PlayerEntity playerTarget &&
                     CombatUtil.isShieldFacingAway(playerTarget) &&
-                    item instanceof SwordItem) {
+                    (item instanceof SwordItem || item instanceof MaceItem)) {
                 return;
             }
         }
@@ -124,32 +118,28 @@ public final class TriggerBot extends Module {
                     double distance = mc.player.distanceTo(target);
                     double maxDistance = 3.0;
                     double multiplier = distance < maxDistance / 2 ? 0.66 : 1.0;
-                    delay = (long) MathUtils.randomDoubleBetween(reactionTime.getMinValue(),
-                            reactionTime.getMaxValue());
+                    delay = (long) MathUtils.randomDoubleBetween(reactionTime.getMinValue(), reactionTime.getMaxValue());
                     delay *= (long) multiplier;
                 }
                 case "None" -> delay = 0;
-                default ->
-                    delay = (long) MathUtils.randomDoubleBetween(reactionTime.getMinValue(),
-                            reactionTime.getMaxValue());
+                default -> delay = (long) MathUtils.randomDoubleBetween(reactionTime.getMinValue(), reactionTime.getMaxValue());
             }
-
             currentReactionDelay = delay;
         }
 
         if (waitingForReaction && timerReactionTime.hasElapsedTime(currentReactionDelay, true)) {
             if (critMode.getMode().equals("Strict")) {
-                if (!mc.player.isOnGround() && !mc.player.isClimbing()) {
-                    if (canCrit() && mc.player.getAttackCooldownProgress(0.0f) >= swordThreshold.getMinValue()) {
+                if (canCrit()) {
+                    // Check Mace Smash Requirements
+                    if (mc.player.getMainHandStack().getItem() instanceof MaceItem && maceSmash.getValue()) {
+                         if (mc.player.fallDistance < 1.5) return; // Wait for smash height
+                    }
+
+                    if (mc.player.getAttackCooldownProgress(0.0f) >= swordThreshold.getMinValue()) {
                         if (hasTarget(target) && samePlayerCheck(target)) {
                             attack();
                             waitingForReaction = false;
                         }
-                    }
-                } else {
-                    if (hasElapsedDelay() && hasTarget(target) && samePlayerCheck(target)) {
-                        attack();
-                        waitingForReaction = false;
                     }
                 }
             } else {
@@ -162,10 +152,8 @@ public final class TriggerBot extends Module {
     }
 
     private boolean samePlayerCheck(Entity entity) {
-        if (!samePlayer.getValue())
-            return true;
-        if (entity == null)
-            return false;
+        if (!samePlayer.getValue()) return true;
+        if (entity == null) return false;
 
         if (lastTargetUUID == null || samePlayerTimer.hasElapsedTime(3000, false)) {
             lastTargetUUID = entity.getUuidAsString();
@@ -176,73 +164,25 @@ public final class TriggerBot extends Module {
     }
 
     private boolean canCrit() {
-        if (mc.player == null)
-            return false;
+        if (mc.player == null) return false;
 
         return !mc.player.isOnGround()
                 && !mc.player.isClimbing()
                 && !mc.player.isInLava()
                 && !mc.player.hasStatusEffect(StatusEffects.BLINDNESS)
-                && mc.player.fallDistance > 0.065f
+                && mc.player.fallDistance > 0.0625f // 1.21 tweaked sensitivity
                 && mc.player.getVehicle() == null;
     }
 
-    private boolean setPreferCrits() {
-        if (mc.player == null || mc.world == null)
-            return false;
-
-        String mode = critMode.getMode();
-        if (mode.equals("None"))
-            return false;
-
-        if (mc.player.hasStatusEffect(StatusEffects.LEVITATION)
-                || mc.player.hasStatusEffect(StatusEffects.SLOW_FALLING)
-                || mc.player.hasStatusEffect(StatusEffects.BLINDNESS)) {
-            return false;
-        }
-
-        if (!(mc.crosshairTarget instanceof EntityHitResult hitResult))
-            return false;
-        Entity targetEntity = hitResult.getEntity();
-        if (targetEntity != target || !hasTarget(targetEntity))
-            return false;
-
-        if (mc.player.isTouchingWater()
-                || mc.player.isInLava()
-                || mc.player.isSubmergedInWater()
-                || mc.player.isClimbing()) {
-            return false;
-        }
-
-        BlockState state = mc.world.getBlockState(mc.player.getBlockPos());
-        if (state.isOf(Blocks.COBWEB)
-                || state.isOf(Blocks.SWEET_BERRY_BUSH)
-                || state.isOf(Blocks.VINE)
-                || state.isOf(Blocks.SCAFFOLDING)
-                || state.isOf(Blocks.SLIME_BLOCK)
-                || state.isOf(Blocks.HONEY_BLOCK)
-                || state.isOf(Blocks.POWDER_SNOW)) {
-            return false;
-        }
-
-        boolean cooldownReady = mc.player.getAttackCooldownProgress(0.0f) >= swordThreshold.getMinValue();
-        return mode.equals("Strict") && cooldownReady && canCrit();
-    }
-
     private boolean hasElapsedDelay() {
-        if (setPreferCrits())
-            return false;
-
         assert mc.player != null;
         Item heldItem = mc.player.getMainHandStack().getItem();
         float cooldown = mc.player.getAttackCooldownProgress(0.0f);
 
-        if (heldItem instanceof AxeItem) {
+        if (heldItem instanceof AxeItem || heldItem instanceof MaceItem) {
             if (!waitingForDelay) {
-                randomizedThreshold = (float) MathUtils.randomDoubleBetween(axeThreshold.getMinValue(),
-                        axeThreshold.getMaxValue());
-                randomizedPostDelay = (float) MathUtils.randomDoubleBetween(axePostDelay.getMinValue(),
-                        axePostDelay.getMaxValue());
+                randomizedThreshold = (float) MathUtils.randomDoubleBetween(axeThreshold.getMinValue(), axeThreshold.getMaxValue());
+                randomizedPostDelay = (float) MathUtils.randomDoubleBetween(axePostDelay.getMinValue(), axePostDelay.getMaxValue());
                 waitingForDelay = true;
             }
             if (cooldown >= randomizedThreshold) {
@@ -255,18 +195,16 @@ public final class TriggerBot extends Module {
             }
             return false;
         } else {
-            float swordDelay = (float) MathUtils.randomDoubleBetween(swordThreshold.getMinValue(),
-                    swordThreshold.getMaxValue());
+            float swordDelay = (float) MathUtils.randomDoubleBetween(swordThreshold.getMinValue(), swordThreshold.getMaxValue());
             return cooldown >= swordDelay;
         }
     }
 
-    private boolean isHoldingSwordOrAxe() {
-        if (!useOnlySwordOrAxe.getValue())
-            return true;
+    private boolean isHoldingWeapon() {
+        if (!useOnlyWeapon.getValue()) return true;
         assert mc.player != null;
         Item item = mc.player.getMainHandStack().getItem();
-        return item instanceof AxeItem || item instanceof SwordItem;
+        return item instanceof AxeItem || item instanceof SwordItem || item instanceof MaceItem;
     }
 
     public void attack() {
@@ -279,14 +217,10 @@ public final class TriggerBot extends Module {
     }
 
     public boolean hasTarget(Entity en) {
-        if (en == mc.player || en == mc.cameraEntity || !en.isAlive())
-            return false;
-        if (en instanceof PlayerEntity player && FriendManager.isFriend(player.getUuid()))
-            return false;
-        if (Teams.isTeammate(en))
-            return false;
-        if (en instanceof WindChargeEntity)
-            return false;
+        if (en == mc.player || en == mc.cameraEntity || !en.isAlive()) return false;
+        if (en instanceof PlayerEntity player && FriendManager.isFriend(player.getUuid())) return false;
+        if (Teams.isTeammate(en)) return false;
+        if (en instanceof WindChargeEntity) return false;
 
         return switch (en) {
             case EndCrystalEntity ignored when ignoreCrystals.getValue() -> false;
